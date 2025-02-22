@@ -22,6 +22,10 @@ class ShotDetector:
 
         # Use video - replace text with your video path
         self.cap = cv2.VideoCapture('practice-videos/D9_1_449_detail.mp4')
+        # self.cap = cv2.VideoCapture('shoot-with-great-form (online-video-cutter.com).mp4')
+        # self.cap = cv2.VideoCapture('3fe1d32b-813c-4034-8307-aaacacf1c87c.mp4')
+        # self.cap = cv2.VideoCapture('shoot-with-great-form (online-video-cutter.com)-2.mp4')
+
 
         self.ball_pos = []  # array of tuples ((x_pos, y_pos), frame count, width, height, conf)
         self.hoop_pos = []  # array of tuples ((x_pos, y_pos), frame count, width, height, conf)
@@ -50,15 +54,96 @@ class ShotDetector:
         self.below_shoulder = False
         self.above_shoulder = False
 
-        release_angle, follow_through_angle, left_feet_heights, right_feet_heights = self.run()
+        # Add new instance variables for storing angles
+        self.shot_metrics = []  # Will store metrics for each shot
 
-        print(f'RELEASE ANGLE: {release_angle}')
-        print(f'FOLLOW THROUGH ANGLE: {follow_through_angle}')
+        # Add video writer setup
+        self.output_path = 'output_video.mp4'
+        frame = self.cap.read()[1]  # Read first frame to get dimensions
+        self.frame_width = int(frame.shape[1])
+        self.frame_height = int(frame.shape[0])
+        self.out = cv2.VideoWriter(
+            self.output_path,
+            cv2.VideoWriter_fourcc(*'mp4v'),
+            30,  # FPS
+            (self.frame_width, self.frame_height)
+        )
 
-        left_release_height = np.mean(left_feet_heights[0:50]) - left_feet_heights[-1]
-        right_release_height = np.mean(right_feet_heights[0:50]) - right_feet_heights[-1]
-        print(f'RELEASE HEIGHT: {np.mean([left_release_height, right_release_height])}')
+        # Add video FPS tracking
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.shot_timestamps = []  # Will store timestamps of shots
 
+        try:
+            release_angle, follow_through_angle, left_feet_heights, right_feet_heights, shot_metrics = self.run()
+            
+            print(f'\nShooting Form Analysis:')
+            print(f'Shot Trajectory: {release_angle:.1f}° (Ideal: 45-55°)')
+            print(f'Follow Through Angle: {follow_through_angle:.1f}°')
+            
+            # Print detailed metrics for each shot
+            for i, metrics in enumerate(shot_metrics):
+                print(f"\nShot {i+1} Metrics:")
+                ideal = metrics['ideal_ranges']
+                
+                def print_metric(name, value, ideal_range):
+                    status = "GOOD" if ideal_range[0] <= value <= ideal_range[1] else "ADJUST"
+                    feedback = ""
+                    
+                    if status == "ADJUST":
+                        if value < ideal_range[0]:
+                            if name == "Shot Trajectory":
+                                feedback = "- Shot too flat, increase release angle"
+                            elif name == "Elbow Angle":
+                                feedback = "- Elbow too bent, extend more"
+                            elif name == "Wrist Angle":
+                                feedback = "- Not enough wrist flexion"
+                            elif name == "Shoulder Angle":
+                                feedback = "- Arms too low, raise shooting pocket"
+                            elif name == "Knee Angle":
+                                feedback = "- Bending knees too much"
+                        else:
+                            if name == "Shot Trajectory":
+                                feedback = "- Shot too high, decrease release angle"
+                            elif name == "Elbow Angle":
+                                feedback = "- Elbow locked, maintain slight bend"
+                            elif name == "Wrist Angle":
+                                feedback = "- Too much wrist flexion"
+                            elif name == "Shoulder Angle":
+                                feedback = "- Arms too high, lower shooting pocket"
+                            elif name == "Knee Angle":
+                                feedback = "- Not enough knee bend"
+                    
+                    print(f"{name}: {value:.1f}° (Ideal: {ideal_range[0]}-{ideal_range[1]}°) - {status} {feedback}")
+                
+                print_metric("Elbow Angle", metrics['elbow_angle'], ideal['elbow_angle'])
+                print_metric("Wrist Angle", metrics['wrist_angle'], ideal['wrist_angle'])
+                print_metric("Shoulder Angle", metrics['shoulder_angle'], ideal['shoulder_angle'])
+                print_metric("Knee Angle", metrics['knee_angle'], ideal['knee_angle'])
+                print_metric("Shot Trajectory", metrics['shot_trajectory'], ideal['shot_trajectory'])
+                
+                # Add release height feedback
+                ratio = metrics['release_height_ratio']
+                print(f"Release Height Ratio: {ratio:.2f}", end=" ")
+                if ratio < 1.8:
+                    print("- Releasing too low, extend up more")
+                elif ratio > 2.3:
+                    print("- Releasing too high, might affect consistency")
+                else:
+                    print("- GOOD")
+            
+            left_release_height = np.mean(left_feet_heights[0:50]) - left_feet_heights[-1]
+            right_release_height = np.mean(right_feet_heights[0:50]) - right_feet_heights[-1]
+            print(f'RELEASE HEIGHT: {np.mean([left_release_height, right_release_height]):.1f}')
+            
+        except Exception as e:
+            print(f"\nAn error occurred: {str(e)}")
+        finally:
+            # Update cleanup to include video writer
+            if hasattr(self, 'cap'):
+                self.cap.release()
+            if hasattr(self, 'out'):
+                self.out.release()
+            cv2.destroyAllWindows()
 
     def run(self):
         release_angle = None
@@ -74,17 +159,25 @@ class ShotDetector:
         follow_through_iter = 10
         follow_through_best = 155
         did_follow_through = False
+        shot_metrics = []
 
         while True:
             ret, self.frame = self.cap.read()
+            
+            # Check if frame was successfully read
+            if not ret or self.frame is None:
+                print("\nEnd of video reached")
+                break
+                
             self.img = self.detector.findPose(self.frame, draw=False)
             self.lmList = self.detector.findPosition(self.img, draw=False)
+            
+            # Check if pose detection was successful
+            if not self.lmList:
+                print("\nNo pose detected in frame")
+                continue
 
             self.detector.findAngle(self.img, 12, 14, 16, draw=True)
-
-            if not ret:
-                # End of the video or an error occurred
-                break
 
             results = self.model(self.frame, stream=True)
 
@@ -106,12 +199,12 @@ class ShotDetector:
                     center = (int(x1 + w / 2), int(y1 + h / 2))
 
                     # Only create ball points if high confidence or near hoop
-                    if (conf > .3 or (in_hoop_region(center, self.hoop_pos) and conf > 0.15)) and current_class == "Basketball":
+                    if (conf > 0.4 or (in_hoop_region(center, self.hoop_pos) and conf > 0.25)) and current_class == "Basketball":
                         self.ball_pos.append((center, self.frame_count, w, h, conf))
                         cvzone.cornerRect(self.frame, (x1, y1, w, h))
 
                     # Create hoop points if high confidence
-                    if conf > .5 and current_class == "Basketball Hoop":
+                    if conf > 0.6 and current_class == "Basketball Hoop":
                         self.hoop_pos.append((center, self.frame_count, w, h, conf))
                         cvzone.cornerRect(self.frame, (x1, y1, w, h))
 
@@ -183,31 +276,62 @@ class ShotDetector:
                         dist = math.dist((rpx, rpy), (bx, by))
 
                         if dist > dist_margin:
-                            release_angle = angle
-                            # cv2.imwrite(f'release-points/RP-{os.path.splitext(fp)[0]}.jpg', self.img)
-                            cv2.putText(self.frame, 'REMEMBER TO FOLLOW THROUGH', (50, 125), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 3)
-                            # cv2.imwrite(f'test.jpg', self.img)
+                            # Capture timestamp
+                            timestamp = self.frame_count / self.fps  # Convert frames to seconds
+                            minutes = int(timestamp // 60)
+                            seconds = timestamp % 60
+                            self.shot_timestamps.append(f"{minutes}:{seconds:05.2f}")
+                            
+                            # Capture all important angles at release
+                            shoulder_pos = (self.lmList[12][1], self.lmList[12][2])
+                            elbow_pos = (self.lmList[14][1], self.lmList[14][2])
+                            ball_pos = (bx, by)
+                            
+                            shot_metric = self.calculate_shot_angles(ball_pos, shoulder_pos, elbow_pos)
+                            
+                            # Calculate release height relative to player height
+                            player_height = self.lmList[24][2] - self.lmList[0][2]  # Distance from hip to nose
+                            ball_height = self.lmList[24][2] - by  # Distance from hip to ball
+                            shot_metric['release_height_ratio'] = ball_height / player_height if player_height != 0 else 0
+                            
+                            shot_metrics.append(shot_metric)
+                            
+                            release_angle = shot_metric['shot_trajectory']
                             release_frame = self.frame_count
-                            already_released=True
+                            already_released = True
 
             self.clean_motion()
             self.shot_detection()
             self.display_score()
             self.frame_count += 1
 
-            cv2.imshow('Frame', self.frame)
+            # After all drawing is done but before cv2.imshow
+            self.out.write(self.frame)
+            
+            cv2.imshow("Basketball Shot Analysis", self.frame)
 
             # Close if 'q' is clicked
             if cv2.waitKey(1) & 0xFF == ord('q'):  # higher waitKey slows video down, use 1 for webcam
                 break
 
+        # Cleanup
+        print("\nFinal Statistics:")
+        print(f"Total Shots Attempted: {self.attempts}")
+        print(f"Shots Made: {self.makes}")
+        if self.attempts > 0:
+            print(f"Shooting Percentage: {(self.makes/self.attempts)*100:.1f}%")
+        
         self.cap.release()
         cv2.destroyAllWindows()
 
         if release_angle > 180:
-            release_angle = 360 - 180
+            release_angle = 360 - release_angle
 
-        return release_angle, follow_through_angle, left_feet_heights, right_feet_heights
+        print("\nShot Release Timestamps:")
+        for i, timestamp in enumerate(self.shot_timestamps):
+            print(f"Shot {i+1}: {timestamp}")
+
+        return release_angle, follow_through_angle, left_feet_heights, right_feet_heights, shot_metrics
 
     def clean_motion(self):
         # Clean and display ball motion
@@ -222,34 +346,64 @@ class ShotDetector:
 
     def shot_detection(self):
         if len(self.hoop_pos) > 0 and len(self.ball_pos) > 0:
-            # Detecting when ball is in 'up' and 'down' area - ball can only be in 'down' area after it is in 'up'
+            # Add debug visualization
+            if len(self.hoop_pos) > 0:
+                # Draw detection zones
+                hoop = self.hoop_pos[-1]
+                x1 = hoop[0][0] - 2 * hoop[2]  # Reduced from 6x
+                x2 = hoop[0][0] + 2 * hoop[2]
+                y1 = hoop[0][1] - 1.5 * hoop[3]  # Reduced from 4x
+                y2 = hoop[0][1]
+                
+                # Draw detection zones for debugging
+                cv2.rectangle(self.frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)  # Up zone
+                
+                # Draw down detection zone
+                y_down = hoop[0][1] + 0.5 * hoop[3]
+                cv2.rectangle(self.frame, (int(x1), int(y_down)), (int(x2), int(y_down + hoop[3])), (0, 255, 0), 2)  # Down zone
+
+            # Rest of the detection logic...
             if not self.up:
                 self.up = detect_up(self.ball_pos, self.hoop_pos)
                 if self.up:
                     self.up_frame = self.ball_pos[-1][1]
+                    print(f"\nBall detected in UP area at frame {self.up_frame}")
+                    # Reset down detection when new up is detected
+                    self.down = False
+                    self.down_frame = 0
 
-            if self.up and not self.down:
+            # Add minimum frame difference requirement
+            if self.up and not self.down and (self.frame_count - self.up_frame) > 5:
                 self.down = detect_down(self.ball_pos, self.hoop_pos)
                 if self.down:
                     self.down_frame = self.ball_pos[-1][1]
+                    print(f"Ball detected in DOWN area at frame {self.down_frame}")
 
-            # If ball goes from 'up' area to 'down' area in that order, increase attempt and reset
-            if self.frame_count % 10 == 0:
-                if self.up and self.down and self.up_frame < self.down_frame:
-                    self.attempts += 1
-                    self.up = False
-                    self.down = False
+            # Add minimum frame difference check
+            if (self.up and self.down and 
+                self.up_frame < self.down_frame and 
+                (self.down_frame - self.up_frame) > 10):  # Minimum frames between up and down
+                
+                print("\nShot Detected!")
+                print(f"Up frame: {self.up_frame}")
+                print(f"Down frame: {self.down_frame}")
+                print(f"Frame difference: {self.down_frame - self.up_frame}")
+                
+                self.attempts += 1
+                self.up = False
+                self.down = False
 
-                    # If it is a make, put a green overlay
-                    if score(self.ball_pos, self.hoop_pos):
-                        self.makes += 1
-                        self.overlay_color = (0, 255, 0)
-                        self.fade_counter = self.fade_frames
-
-                    # If it is a miss, put a red overlay
-                    else:
-                        self.overlay_color = (0, 0, 255)
-                        self.fade_counter = self.fade_frames
+                # If it is a make, put a green overlay
+                if score(self.ball_pos, self.hoop_pos):
+                    self.makes += 1
+                    print("Shot made!")
+                    self.overlay_color = (0, 255, 0)
+                    self.fade_counter = self.fade_frames
+                # If it is a miss, put a red overlay
+                else:
+                    print("Shot missed!")
+                    self.overlay_color = (0, 0, 255)
+                    self.fade_counter = self.fade_frames
 
     def display_score(self):
         # Add text
@@ -262,6 +416,41 @@ class ShotDetector:
             alpha = 0.2 * (self.fade_counter / self.fade_frames)
             self.frame = cv2.addWeighted(self.frame, 1 - alpha, np.full_like(self.frame, self.overlay_color), alpha, 0)
             self.fade_counter -= 1
+
+    def calculate_shot_angles(self, ball_pos, shoulder_pos, elbow_pos):
+        # Calculate shot trajectory relative to horizontal
+        dx = ball_pos[0] - shoulder_pos[0]
+        dy = shoulder_pos[1] - ball_pos[1]  # Flip y because image coordinates
+        shot_angle = math.degrees(math.atan2(dy, dx))
+        
+        # Convert to angle from horizontal (0° is horizontal right, 90° is vertical up)
+        shot_angle = 90 - shot_angle  # Convert to standard coordinate system
+        
+        shot_metric = {}
+        
+        # Right arm angles - adjusted for basketball context
+        elbow_angle = self.detector.findAngle(self.img, 12, 14, 16, draw=False)
+        wrist_angle = self.detector.findAngle(self.img, 14, 16, 20, draw=False)
+        shoulder_angle = self.detector.findAngle(self.img, 24, 12, 14, draw=False)
+        knee_angle = self.detector.findAngle(self.img, 24, 26, 28, draw=False)
+        
+        # Normalize angles to positive values
+        shot_metric['elbow_angle'] = abs(elbow_angle)  # Should be 165-175° at release
+        shot_metric['wrist_angle'] = abs(wrist_angle)  # Should be 70-90° at release
+        shot_metric['shoulder_angle'] = abs(shoulder_angle)  # Should be around 90-110° at release
+        shot_metric['knee_angle'] = abs(knee_angle)  # Should be 140-170° at release
+        shot_metric['shot_trajectory'] = shot_angle  # Should be 45-55° at release
+        
+        # Add ideal ranges for feedback
+        shot_metric['ideal_ranges'] = {
+            'elbow_angle': (165, 175),
+            'wrist_angle': (70, 90),
+            'shoulder_angle': (90, 110),
+            'knee_angle': (140, 170),
+            'shot_trajectory': (45, 55)
+        }
+        
+        return shot_metric
 
 
 if __name__ == "__main__":

@@ -30,17 +30,20 @@ def score(ball_pos, hoop_pos):
 
 # Detects if the ball is below the net - used to detect shot attempts
 def detect_down(ball_pos, hoop_pos):
+    x1 = hoop_pos[-1][0][0] - 1.5 * hoop_pos[-1][2]
+    x2 = hoop_pos[-1][0][0] + 1.5 * hoop_pos[-1][2]
     y = hoop_pos[-1][0][1] + 0.5 * hoop_pos[-1][3]
-    if ball_pos[-1][0][1] > y:
+    
+    if ball_pos[-1][0][1] > y and x1 < ball_pos[-1][0][0] < x2:
         return True
     return False
 
 
 # Detects if the ball is around the backboard - used to detect shot attempts
 def detect_up(ball_pos, hoop_pos):
-    x1 = hoop_pos[-1][0][0] - 4 * hoop_pos[-1][2]
-    x2 = hoop_pos[-1][0][0] + 4 * hoop_pos[-1][2]
-    y1 = hoop_pos[-1][0][1] - 2 * hoop_pos[-1][3]
+    x1 = hoop_pos[-1][0][0] - 2 * hoop_pos[-1][2]
+    x2 = hoop_pos[-1][0][0] + 2 * hoop_pos[-1][2]
+    y1 = hoop_pos[-1][0][1] - 1.5 * hoop_pos[-1][3]
     y2 = hoop_pos[-1][0][1]
 
     if x1 < ball_pos[-1][0][0] < x2 and y1 < ball_pos[-1][0][1] < y2 - 0.5 * hoop_pos[-1][3]:
@@ -55,9 +58,9 @@ def in_hoop_region(center, hoop_pos):
     x = center[0]
     y = center[1]
 
-    x1 = hoop_pos[-1][0][0] - 1 * hoop_pos[-1][2]
-    x2 = hoop_pos[-1][0][0] + 1 * hoop_pos[-1][2]
-    y1 = hoop_pos[-1][0][1] - 1 * hoop_pos[-1][3]
+    x1 = hoop_pos[-1][0][0] - 0.75 * hoop_pos[-1][2]
+    x2 = hoop_pos[-1][0][0] + 0.75 * hoop_pos[-1][2]
+    y1 = hoop_pos[-1][0][1] - 0.75 * hoop_pos[-1][3]
     y2 = hoop_pos[-1][0][1] + 0.5 * hoop_pos[-1][3]
 
     if x1 < x < x2 and y1 < y < y2:
